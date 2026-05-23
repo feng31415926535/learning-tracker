@@ -22,3 +22,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# IDE tool files
+.trae/
+
+# Test output
+dogfood-output/
+
+# Test reports
+TEST_REPORT.md
+试运行报告.md
+CODE_WIKI.md
