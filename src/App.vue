@@ -26,6 +26,7 @@ const showTestModal = ref(false)
 const planToDelete = ref<string | null>(null)
 const currentFilter = ref<TaskStatus | 'all'>('all')
 const testChapter = ref<Chapter | null>(null)
+const testModalView = ref<'test' | 'history'>('test')
 
 // Computed
 const hasPlan = computed(() => store.activePlan !== null)
@@ -193,6 +194,13 @@ function handleSaveLLMConfig(config: any) {
 
 function handleOpenTest(chapter: Chapter) {
   testChapter.value = chapter
+  testModalView.value = 'test'
+  showTestModal.value = true
+}
+
+function handleOpenHistory(chapter: Chapter) {
+  testChapter.value = chapter
+  testModalView.value = 'history'
   showTestModal.value = true
 }
 </script>
@@ -232,6 +240,7 @@ function handleOpenTest(chapter: Chapter) {
             @toggle-task="handleToggleTask"
             @rate-task="handleRateTask"
             @open-test="handleOpenTest"
+            @open-history="handleOpenHistory"
           />
         </div>
       </div>
@@ -276,6 +285,7 @@ function handleOpenTest(chapter: Chapter) {
       :visible="showTestModal"
       :chapter="testChapter"
       :llm-config="currentLlmConfig"
+      :initial-view="testModalView"
       @close="handleCloseTest"
       @open-config="handleOpenLLMConfig"
     />
