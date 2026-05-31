@@ -44,6 +44,36 @@ export interface TestQuestion {
   explanation: string    // 答案解析
 }
 
+/**
+ * Single question answer record
+ */
+export interface TestAnswerRecord {
+  questionId: string
+  question: string
+  options: string[]
+  userAnswer: number | null
+  correctAnswer: number
+  explanation: string
+  isCorrect: boolean
+}
+
+/**
+ * Complete test history record
+ */
+export interface TestHistoryRecord {
+  id: string
+  chapterId: string
+  chapterTitle: string
+  planId: string
+  planName: string
+  score: number
+  totalQuestions: number
+  scorePercentage: number
+  timeSpent: number
+  answers: TestAnswerRecord[]
+  createdAt: string
+}
+
 export interface AppData {
   plans: Plan[]
   activePlanId: string | null
