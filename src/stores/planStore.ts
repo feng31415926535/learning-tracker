@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { useLocalStorage } from '@vueuse/core'
-import type { Plan, Task, Chapter, TaskStatus, Theme, ImportTask, LLMConfig } from '@/types'
+import type { Plan, Task, Chapter, TaskStatus, Theme, ImportTask, LLMConfig, TestHistoryRecord } from '@/types'
 
 const STORAGE_KEY = 'learning-tracker-data'
 
@@ -44,6 +44,9 @@ export const usePlanStore = defineStore('plan', () => {
   
   // 暴露给外部的 llmConfig
   const llmConfig = computed(() => llmConfigData.value)
+
+  // Test history
+  const testHistory = useLocalStorage<TestHistoryRecord[]>(STORAGE_KEY + '-test-history', [])
 
   // Getters
   const activePlan = computed(() => {
@@ -178,12 +181,25 @@ export const usePlanStore = defineStore('plan', () => {
     llmConfigData.value = config
   }
 
+  function saveTestHistory(record: TestHistoryRecord) {
+    testHistory.value.unshift(record)
+  }
+
+  function getTestHistoryByChapter(chapterId: string): TestHistoryRecord[] {
+    return testHistory.value.filter(r => r.chapterId === chapterId)
+  }
+
+  function clearTestHistory() {
+    testHistory.value = []
+  }
+
   return {
     // State
     plans,
     activePlanId,
     theme,
     llmConfig: llmConfigData,
+    testHistory,
     // Getters
     activePlan,
     planCount,
@@ -195,6 +211,9 @@ export const usePlanStore = defineStore('plan', () => {
     rateTask,
     toggleTheme,
     saveLLMConfig,
+    saveTestHistory,
+    getTestHistoryByChapter,
+    clearTestHistory,
     getPlanProgress,
     getChapterProgress
   }
