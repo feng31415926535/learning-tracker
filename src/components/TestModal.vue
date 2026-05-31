@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import type { Chapter, LLMConfig, TestQuestion } from '@/types'
+import type { Chapter, LLMConfig, TestQuestion, TestHistoryRecord, TestAnswerRecord } from '@/types'
+import { usePlanStore } from '@/stores/planStore'
 
 const props = defineProps<{
   visible: boolean
   chapter: Chapter | null
   llmConfig?: LLMConfig
+  initialView?: 'test' | 'history'
 }>()
 
 const emit = defineEmits<{
@@ -13,20 +15,25 @@ const emit = defineEmits<{
   openConfig: []
 }>()
 
-// ===== 状态 =====
+const store = usePlanStore()
+
+// ===== State =====
+type ViewMode = 'loading' | 'answering' | 'result' | 'detail' | 'history'
+
+const viewMode = ref<ViewMode>('loading')
 const loading = ref(false)
 const error = ref('')
 const questions = ref<TestQuestion[]>([])
 const currentIndex = ref(0)
-const answers = ref<(number | null)[]>([])  // 存储所有题目的答案
-const answered = ref<boolean[]>([])           // 记录每道题是否已确认答案
-const showResult = ref(false)      // 是否显示最终结果页
+const answers = ref<(number | null)[]>([])
+const answered = ref<boolean[]>([])
 const score = ref(0)
-const elapsedTime = ref(0)         // 答题用时（秒）
+const elapsedTime = ref(0)
+const selectedHistoryRecord = ref<TestHistoryRecord | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 let abortController: AbortController | null = null
 
-// ===== 计算属性 =====
+// ===== Computed =====
 const currentQuestion = computed(() => questions.value[currentIndex.value])
 const isLastQuestion = computed(() => currentIndex.value === questions.value.length - 1)
 const isFirstQuestion = computed(() => currentIndex.value === 0)
@@ -55,12 +62,53 @@ const resultMessage = computed(() => {
 
 // 格式化时间
 const formattedTime = computed(() => {
-  const min = Math.floor(elapsedTime.value / 60)
-  const sec = elapsedTime.value % 60
-  return `${min}:${sec.toString().padStart(2, '0')}`
+  const mins = Math.floor(elapsedTime.value / 60)
+  const secs = elapsedTime.value % 60
+  return `${mins}:${secs.toString().padStart(2, '0')}`
 })
 
-// ===== 计时器 =====
+// ===== Helper Methods =====
+function formatDate(isoString: string): string {
+  const date = new Date(isoString)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+function getScoreLevelClass(percentage: number): 'high' | 'medium' | 'low' {
+  if (percentage >= 80) return 'high'
+  if (percentage >= 60) return 'medium'
+  return 'low'
+}
+
+// ===== View Navigation =====
+function goToHistoryView() {
+  viewMode.value = 'history'
+}
+
+function goToDetailView(record: TestHistoryRecord) {
+  selectedHistoryRecord.value = record
+  viewMode.value = 'detail'
+}
+
+function goToResultView() {
+  selectedHistoryRecord.value = null
+  viewMode.value = 'result'
+}
+
+function goBackFromDetail() {
+  if (selectedHistoryRecord.value?.id === 'temp' || store.getTestHistoryByChapter(props.chapter?.id || '').length === 0) {
+    viewMode.value = 'result'
+  } else {
+    viewMode.value = 'history'
+  }
+}
+
+// ===== Timer =====
 function startTimer() {
   stopTimer()
   elapsedTime.value = 0
@@ -93,7 +141,7 @@ onMounted(() => {
   document.addEventListener('keydown', handleKeydown)
 })
 
-// ===== API 调用 =====
+// ===== API Calls =====
 async function generateQuestions() {
   if (!props.chapter || !props.llmConfig) return
 
@@ -105,10 +153,10 @@ async function generateQuestions() {
   error.value = ''
   questions.value = []
   currentIndex.value = 0
-  answers.value = []           // 重置答案数组
-  answered.value = []          // 重置已答状态
-  showResult.value = false
+  answers.value = []
+  answered.value = []
   score.value = 0
+  viewMode.value = 'loading'
 
   try {
     // 构建知识点详情
@@ -244,6 +292,7 @@ ${ratedTasks.length > 0 ? `- 学习者自评较低的薄弱知识点：${ratedTa
 
       // 开始计时
       startTimer()
+      viewMode.value = 'answering'
     } else {
       throw new Error('返回数据格式异常')
     }
@@ -264,8 +313,69 @@ function cancelGeneration() {
   loading.value = false
 }
 
-// ===== 答题逻辑 =====
+// ===== Test History =====
+function saveCurrentTest() {
+  if (!props.chapter || !store.activePlan || questions.value.length === 0) return
 
+  const record: TestHistoryRecord = {
+    id: Date.now().toString(36) + Math.random().toString(36).substring(2),
+    chapterId: props.chapter.id,
+    chapterTitle: props.chapter.title,
+    planId: store.activePlan.id,
+    planName: store.activePlan.name,
+    score: score.value,
+    totalQuestions: questions.value.length,
+    scorePercentage: Math.round((score.value / questions.value.length) * 100),
+    timeSpent: elapsedTime.value,
+    answers: questions.value.map((q, i) => ({
+      questionId: q.id,
+      question: q.question,
+      options: q.options,
+      userAnswer: answers.value[i] ?? null,
+      correctAnswer: q.correctAnswer,
+      explanation: q.explanation,
+      isCorrect: answers.value[i] === q.correctAnswer
+    })),
+    createdAt: new Date().toISOString()
+  }
+
+  store.saveTestHistory(record)
+}
+
+function viewCurrentTestDetails() {
+  if (!props.chapter || !store.activePlan || questions.value.length === 0) return
+
+  selectedHistoryRecord.value = {
+    id: 'temp',
+    chapterId: props.chapter.id,
+    chapterTitle: props.chapter.title,
+    planId: store.activePlan.id,
+    planName: store.activePlan.name,
+    score: score.value,
+    totalQuestions: questions.value.length,
+    scorePercentage: Math.round((score.value / questions.value.length) * 100),
+    timeSpent: elapsedTime.value,
+    answers: questions.value.map((q, i) => ({
+      questionId: q.id,
+      question: q.question,
+      options: q.options,
+      userAnswer: answers.value[i] ?? null,
+      correctAnswer: q.correctAnswer,
+      explanation: q.explanation,
+      isCorrect: answers.value[i] === q.correctAnswer
+    })),
+    createdAt: new Date().toISOString()
+  }
+  viewMode.value = 'detail'
+}
+
+function clearHistoryWithConfirm() {
+  if (confirm('确定要清空所有测试历史记录吗？此操作无法撤销。')) {
+    store.clearTestHistory()
+  }
+}
+
+// ===== Answering Logic =====
 // 选择答案（仅标记，不确认）
 function selectAnswer(index: number) {
   if (currentAnswered.value) return
@@ -290,7 +400,7 @@ function nextQuestion() {
   if (isLastQuestion.value) {
     // 最后一题 → 显示结果页
     stopTimer()
-    showResult.value = true
+    viewMode.value = 'result'
   } else {
     currentIndex.value++
   }
@@ -311,29 +421,44 @@ function retryTest() {
 function close() {
   stopTimer()
   abortController?.abort()
+
+  // 保存到历史如果刚完成测试
+  if (viewMode.value === 'result' && questions.value.length > 0) {
+    saveCurrentTest()
+  }
+
+  // 重置状态
   questions.value = []
   currentIndex.value = 0
-  selectedAnswer.value = null
-  answered.value = false
-  showResult.value = false
+  answers.value = []
+  answered.value = []
   score.value = 0
   elapsedTime.value = 0
+  selectedHistoryRecord.value = null
+  viewMode.value = 'loading'
+
   emit('close')
 }
 
-// 弹窗打开时自动生成
-watch(() => props.visible, (visible) => {
-  if (visible && props.llmConfig && props.chapter) {
-    generateQuestions()
+// 弹窗打开时自动处理
+watch(() => [props.visible, props.initialView], ([visible, initialView]) => {
+  if (visible) {
+    if (initialView === 'history') {
+      viewMode.value = 'history'
+    } else if (props.llmConfig && props.chapter) {
+      generateQuestions()
+    }
   }
-})
+}, { immediate: true })
 </script>
 
 <template>
   <div v-if="visible" class="modal-overlay" @click.self="close">
-    <div class="modal" style="max-width: 600px;">
+    <div class="modal">
       <div class="modal-header">
-        <h3 class="modal-title">学后测试 - {{ chapter?.title }}</h3>
+        <h3 class="modal-title">
+          {{ viewMode === 'history' ? '📜 历史记录' : viewMode === 'detail' ? '📝 答题详情' : `学后测试 - ${chapter?.title}` }}
+        </h3>
         <button type="button" class="modal-close" @click="close" aria-label="关闭">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M18 6L6 18M6 6L18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -342,14 +467,14 @@ watch(() => props.visible, (visible) => {
       </div>
 
       <div class="modal-body">
-        <!-- 加载中 -->
-        <div v-if="loading" class="test-loading">
+        <!-- Loading View -->
+        <div v-if="viewMode === 'loading'" class="test-loading">
           <div class="spinner"></div>
           <p>正在生成测试题...</p>
           <button class="btn" @click="cancelGeneration">取消</button>
         </div>
 
-        <!-- 错误提示 -->
+        <!-- Error View -->
         <div v-else-if="error" class="test-error">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="10"/>
@@ -363,8 +488,8 @@ watch(() => props.visible, (visible) => {
           </div>
         </div>
 
-        <!-- 未配置 LLM -->
-        <div v-else-if="!llmConfig" class="test-empty">
+        <!-- No LLM Config -->
+        <div v-else-if="viewMode !== 'history' && viewMode !== 'detail' && !llmConfig" class="test-empty">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
             <line x1="12" y1="9" x2="12" y2="13"/>
@@ -377,11 +502,123 @@ watch(() => props.visible, (visible) => {
           </div>
         </div>
 
-        <!-- 结果页 -->
-        <div v-else-if="showResult" class="test-result">
+        <!-- History List View -->
+        <div v-else-if="viewMode === 'history'" class="history-view">
+          <div class="history-header">
+            <h4>{{ chapter?.title }}</h4>
+            <button 
+              v-if="store.getTestHistoryByChapter(chapter?.id || '').length > 0"
+              class="btn btn-secondary"
+              @click="clearHistoryWithConfirm"
+            >
+              清空记录
+            </button>
+          </div>
+
+          <div class="history-list">
+            <div v-if="store.getTestHistoryByChapter(chapter?.id || '').length === 0" class="history-empty">
+              暂无测试记录，快去完成一次测试吧！
+            </div>
+
+            <div 
+              v-for="record in store.getTestHistoryByChapter(chapter?.id || '')" 
+              :key="record.id"
+              class="history-item"
+            >
+              <div class="history-item-info">
+                <div class="history-item-date">{{ formatDate(record.createdAt) }}</div>
+                <div class="history-item-score">
+                  <span :class="['score-badge', getScoreLevelClass(record.scorePercentage)]">
+                    {{ record.scorePercentage }}%
+                  </span>
+                  <span class="score-detail">
+                    {{ record.score }}/{{ record.totalQuestions }} · {{ formatTime(record.timeSpent) }}
+                  </span>
+                </div>
+              </div>
+              <button class="btn btn-primary btn-sm" @click="goToDetailView(record)">
+                查看详情
+              </button>
+            </div>
+          </div>
+
+          <div class="history-footer">
+            <button v-if="llmConfig" class="btn" @click="generateQuestions">
+              开始新测试
+            </button>
+            <button class="btn btn-primary" @click="close">
+              关闭
+            </button>
+          </div>
+        </div>
+
+        <!-- Detail View -->
+        <div v-else-if="viewMode === 'detail'" class="detail-view">
+          <div v-if="selectedHistoryRecord" class="detail-content">
+            <!-- Summary -->
+            <div class="detail-summary">
+              <div class="score-circle-large" :class="getScoreLevelClass(selectedHistoryRecord.scorePercentage)">
+                <span class="score-number">{{ selectedHistoryRecord.scorePercentage }}%</span>
+                <span class="score-total">{{ selectedHistoryRecord.score }}/{{ selectedHistoryRecord.totalQuestions }}</span>
+              </div>
+              <div class="detail-meta">
+                <div v-if="selectedHistoryRecord.id !== 'temp'">{{ formatDate(selectedHistoryRecord.createdAt) }}</div>
+                <div>用时 {{ formatTime(selectedHistoryRecord.timeSpent) }}</div>
+              </div>
+            </div>
+
+            <!-- Answers List -->
+            <div class="detail-answers">
+              <div 
+                v-for="(answer, idx) in selectedHistoryRecord.answers" 
+                :key="answer.questionId"
+                class="detail-answer-item"
+              >
+                <div class="detail-question">
+                  <span class="question-number">{{ idx + 1 }}.</span>
+                  {{ answer.question }}
+                </div>
+
+                <div class="detail-options">
+                  <div 
+                    v-for="(opt, optIdx) in answer.options" 
+                    :key="optIdx"
+                    :class="[
+                      'detail-option',
+                      answer.userAnswer === optIdx && answer.isCorrect ? 'correct' : '',
+                      answer.userAnswer === optIdx && !answer.isCorrect ? 'wrong' : '',
+                      answer.correctAnswer === optIdx && answer.userAnswer !== optIdx ? 'correct-answer' : ''
+                    ]"
+                  >
+                    <span class="option-letter">{{ ['A', 'B', 'C', 'D'][optIdx] }}.</span>
+                    {{ opt }}
+                    <span v-if="answer.correctAnswer === optIdx" class="correct-mark">✓</span>
+                    <span v-else-if="answer.userAnswer === optIdx && !answer.isCorrect" class="wrong-mark">✗</span>
+                  </div>
+                </div>
+
+                <div class="detail-explanation">
+                  <strong>解析：</strong>{{ answer.explanation }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-footer">
+            <button class="btn" @click="goBackFromDetail">
+              {{ store.getTestHistoryByChapter(chapter?.id || '').length > 0 ? '← 返回历史' : '← 返回结果' }}
+            </button>
+            <button class="btn btn-primary" @click="close">
+              关闭
+            </button>
+          </div>
+        </div>
+
+        <!-- Result View -->
+        <div v-else-if="viewMode === 'result'" class="test-result">
           <div class="score-circle" :class="scoreLevel">
             <span class="score-number">{{ scorePercent }}%</span>
-            <span class="score-total">{{ score }} / {{ questions.length }} 题</span>
+            <span class="score-total">{{ score }}/{{ questions.length }} 题</span>
           </div>
           <p class="result-text">{{ resultMessage }}</p>
           <div class="result-meta">
@@ -389,16 +626,18 @@ watch(() => props.visible, (visible) => {
           </div>
           <div class="result-actions">
             <button class="btn" @click="retryTest">重新测试</button>
+            <button class="btn" @click="goToHistoryView">查看历史</button>
+            <button class="btn btn-primary" @click="viewCurrentTestDetails">查看详情</button>
             <button class="btn btn-primary" @click="close">完成</button>
           </div>
         </div>
 
-        <!-- 答题页 -->
-        <div v-else-if="currentQuestion" class="test-content">
+        <!-- Answering View -->
+        <div v-else-if="viewMode === 'answering' && currentQuestion" class="test-content">
           <!-- 顶部信息栏 -->
           <div class="question-header">
             <div class="header-row">
-              <span class="question-number">题目 {{ currentIndex + 1 }} / {{ questions.length }}</span>
+              <span class="question-number">题目 {{ currentIndex + 1 }}/{{ questions.length }}</span>
               <span class="timer">⏱ {{ formattedTime }}</span>
             </div>
             <div class="progress-bar">
@@ -478,7 +717,7 @@ watch(() => props.visible, (visible) => {
 </template>
 
 <style scoped>
-/* ===== 加载/错误/空状态 ===== */
+/* ===== Loading/Error/Empty States ===== */
 .test-loading,
 .test-error,
 .test-empty {
@@ -514,7 +753,283 @@ watch(() => props.visible, (visible) => {
   gap: var(--sp-md);
 }
 
-/* ===== 结果页 ===== */
+/* ===== History View ===== */
+.history-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+  max-height: 500px;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: var(--sp-sm);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.history-header h4 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sm);
+}
+
+.history-empty {
+  text-align: center;
+  padding: var(--sp-xl) 0;
+  color: var(--text-muted);
+}
+
+.history-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--sp-md);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  gap: var(--sp-md);
+}
+
+.history-item-info {
+  flex: 1;
+}
+
+.history-item-date {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.history-item-score {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+}
+
+.score-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.score-badge.high {
+  background: rgba(76, 175, 124, 0.15);
+  color: var(--status-completed);
+}
+
+.score-badge.medium {
+  background: rgba(232, 168, 76, 0.15);
+  color: var(--status-speed-up);
+}
+
+.score-badge.low {
+  background: rgba(232, 93, 76, 0.15);
+  color: var(--status-important);
+}
+
+.score-detail {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.history-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-sm);
+  padding-top: var(--sp-md);
+  border-top: 1px solid var(--border-color);
+}
+
+/* ===== Detail View ===== */
+.detail-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+  max-height: 500px;
+}
+
+.detail-content {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-lg);
+}
+
+.detail-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-lg);
+  padding: var(--sp-md);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.score-circle-large {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 4px solid var(--border-color);
+  transition: border-color 0.3s ease;
+}
+
+.score-circle-large.high {
+  border-color: var(--status-completed);
+  background: rgba(76, 175, 124, 0.08);
+}
+
+.score-circle-large.medium {
+  border-color: var(--status-speed-up);
+  background: rgba(232, 168, 76, 0.08);
+}
+
+.score-circle-large.low {
+  border-color: var(--status-important);
+  background: rgba(232, 93, 76, 0.08);
+}
+
+.score-circle-large .score-number {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.score-circle-large .score-total {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.detail-meta {
+  flex: 1;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.detail-answers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-lg);
+}
+
+.detail-answer-item {
+  padding: var(--sp-md);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.detail-question {
+  font-weight: 600;
+  margin-bottom: var(--sp-md);
+  line-height: 1.6;
+}
+
+.question-number {
+  color: var(--text-muted);
+  margin-right: var(--sp-sm);
+}
+
+.detail-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sm);
+  margin-bottom: var(--sp-md);
+}
+
+.detail-option {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+  padding: var(--sp-sm) var(--sp-md);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  border: 2px solid transparent;
+}
+
+.detail-option.correct {
+  border-color: var(--status-completed);
+  background: rgba(76, 175, 124, 0.08);
+}
+
+.detail-option.wrong {
+  border-color: var(--status-important);
+  background: rgba(232, 93, 76, 0.08);
+}
+
+.detail-option.correct-answer {
+  border-color: var(--status-completed);
+  background: rgba(76, 175, 124, 0.08);
+}
+
+.option-letter {
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 20px;
+}
+
+.correct-mark {
+  margin-left: auto;
+  color: var(--status-completed);
+  font-weight: 700;
+}
+
+.wrong-mark {
+  margin-left: auto;
+  color: var(--status-important);
+  font-weight: 700;
+}
+
+.detail-explanation {
+  padding: var(--sp-sm) var(--sp-md);
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.detail-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-sm);
+  padding-top: var(--sp-md);
+  border-top: 1px solid var(--border-color);
+}
+
+.btn-sm {
+  padding: var(--sp-sm) var(--sp-md);
+  font-size: 0.875rem;
+}
+
+.btn-secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+  background: var(--border-hover);
+}
+
+/* ===== Result View ===== */
 .test-result {
   display: flex;
   flex-direction: column;
@@ -578,10 +1093,12 @@ watch(() => props.visible, (visible) => {
 
 .result-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-md);
+  justify-content: center;
 }
 
-/* ===== 答题页 ===== */
+/* ===== Answering View ===== */
 .test-content {
   display: flex;
   flex-direction: column;
@@ -633,7 +1150,7 @@ watch(() => props.visible, (visible) => {
   color: var(--text-primary);
 }
 
-/* ===== 选项 ===== */
+/* ===== Options ===== */
 .options-list {
   display: flex;
   flex-direction: column;
@@ -728,7 +1245,7 @@ watch(() => props.visible, (visible) => {
   color: var(--status-important);
 }
 
-/* ===== 解析 ===== */
+/* ===== Explanation ===== */
 .explanation {
   padding: var(--sp-md);
   background: var(--bg-tertiary);
@@ -764,7 +1281,7 @@ watch(() => props.visible, (visible) => {
   color: var(--text-secondary);
 }
 
-/* ===== 底部操作栏 ===== */
+/* ===== Question Footer ===== */
 .question-footer {
   display: flex;
   justify-content: space-between;
@@ -773,7 +1290,7 @@ watch(() => props.visible, (visible) => {
   border-top: 1px solid var(--border-color);
 }
 
-/* ===== 过渡动画 ===== */
+/* ===== Transition ===== */
 .fade-enter-active {
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
