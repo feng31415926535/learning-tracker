@@ -401,6 +401,8 @@ function nextQuestion() {
     // 最后一题 → 显示结果页
     stopTimer()
     viewMode.value = 'result'
+    // 立即保存测试历史
+    saveCurrentTest()
   } else {
     currentIndex.value++
   }
@@ -421,11 +423,6 @@ function retryTest() {
 function close() {
   stopTimer()
   abortController?.abort()
-
-  // 保存到历史如果刚完成测试
-  if (viewMode.value === 'result' && questions.value.length > 0) {
-    saveCurrentTest()
-  }
 
   // 重置状态
   questions.value = []
