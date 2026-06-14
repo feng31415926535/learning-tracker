@@ -11,10 +11,11 @@ export interface LLMRequestOptions {
   temperature?: number
   maxTokens?: number
   signal?: AbortSignal
+  jsonMode?: boolean  // 是否要求 JSON 格式响应，默认 false
 }
 
 export async function callLLM(options: LLMRequestOptions): Promise<string> {
-  const { config, messages, temperature = 0.7, maxTokens = 2000, signal } = options
+  const { config, messages, temperature = 0.7, maxTokens = 2000, signal, jsonMode = false } = options
 
   const requestBody: any = {
     model: config.model,
@@ -23,8 +24,8 @@ export async function callLLM(options: LLMRequestOptions): Promise<string> {
     max_tokens: maxTokens
   }
 
-  // 仅对兼容的提供商添加 response_format
-  if (['openai', 'deepseek', 'moonshot', 'yi'].includes(config.provider)) {
+  // 仅在明确需要 JSON 格式时添加 response_format
+  if (jsonMode && ['openai', 'deepseek', 'moonshot', 'yi'].includes(config.provider)) {
     requestBody.response_format = { type: 'json_object' }
   }
 
