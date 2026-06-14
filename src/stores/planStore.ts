@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { useLocalStorage } from '@vueuse/core'
-import type { Plan, Task, Chapter, TaskStatus, Theme, ImportTask, LLMConfig, TestHistoryRecord } from '@/types'
+import type { Plan, Task, Chapter, TaskStatus, Theme, ImportTask, LLMConfig, TestHistoryRecord, ChatMessage, ChatSession } from '@/types'
 
 const STORAGE_KEY = 'learning-tracker-data'
 
@@ -47,6 +47,9 @@ export const usePlanStore = defineStore('plan', () => {
 
   // Test history
   const testHistory = useLocalStorage<TestHistoryRecord[]>(STORAGE_KEY + '-test-history', [])
+
+  // Chat history
+  const chatHistory = useLocalStorage<ChatSession[]>(STORAGE_KEY + '-chat-history', [])
 
   // Getters
   const activePlan = computed(() => {
@@ -193,6 +196,25 @@ export const usePlanStore = defineStore('plan', () => {
     testHistory.value = []
   }
 
+  function saveChatMessage(sessionId: string, message: ChatMessage) {
+    const session = chatHistory.value.find(s => s.id === sessionId)
+    if (session) {
+      session.messages.push(message)
+      session.updatedAt = new Date().toISOString()
+    } else {
+      chatHistory.value.push({
+        id: sessionId,
+        messages: [message],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      })
+    }
+  }
+
+  function clearChatHistory() {
+    chatHistory.value = []
+  }
+
   return {
     // State
     plans,
@@ -200,6 +222,7 @@ export const usePlanStore = defineStore('plan', () => {
     theme,
     llmConfig: llmConfigData,
     testHistory,
+    chatHistory,
     // Getters
     activePlan,
     planCount,
@@ -214,6 +237,8 @@ export const usePlanStore = defineStore('plan', () => {
     saveTestHistory,
     getTestHistoryByChapter,
     clearTestHistory,
+    saveChatMessage,
+    clearChatHistory,
     getPlanProgress,
     getChapterProgress
   }

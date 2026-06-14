@@ -14,6 +14,7 @@ import ImportModal from '@/components/ImportModal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import LLMConfigModal from '@/components/LLMConfigModal.vue'
 import TestModal from '@/components/TestModal.vue'
+import AIChatWidget from '@/components/AIChatWidget/AIChatWidget.vue'
 
 const store = usePlanStore()
 
@@ -289,6 +290,9 @@ function handleOpenHistory(chapter: Chapter) {
       @close="handleCloseTest"
       @open-config="handleOpenLLMConfig"
     />
+
+    <!-- AI Chat Widget -->
+    <AIChatWidget @open-llm-config="handleOpenLLMConfig" />
   </div>
 </template>
 
